@@ -199,9 +199,11 @@ export class MiseExtension {
 		vscode.window.registerTreeDataProvider("miseEnvsView", envsProvider);
 
 		vscode.workspace.onDidChangeConfiguration((e) => {
-			const miseConfigUpdated = Object.values(CONFIGURATION_FLAGS).some(
-				(flag) => e.affectsConfiguration(`mise.${flag}`),
-			);
+			const miseConfigUpdated = Object.values(CONFIGURATION_FLAGS)
+				// `binPath` is resolved at runtime and can be churned by settings
+				// sync across machines; reloading on it caused an infinite loop.
+				.filter((flag) => flag !== CONFIGURATION_FLAGS.binPath)
+				.some((flag) => e.affectsConfiguration(`mise.${flag}`));
 
 			if (miseConfigUpdated) {
 				vscode.commands.executeCommand(MISE_RELOAD);

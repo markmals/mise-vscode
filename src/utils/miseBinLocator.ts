@@ -29,8 +29,15 @@ export async function resolveMisePath(): Promise<string> {
 		);
 	}
 
-	// Check if mise is in the PATH
-	// the default value (`mise`) should already be enough for most cases
+	// Prefer the bare `mise` command when it's available on PATH. This is
+	// portable across machines (no hard-coded absolute path), which matters
+	// because the resolved path is not persisted to the synced settings.
+	if (await isValidBinary("mise")) {
+		return "mise";
+	}
+
+	// Otherwise fall back to locating an absolute path (the extension host's
+	// PATH doesn't always include the user's shell PATH, e.g. GUI launches).
 
 	// check for win32 first, as `which` (see https://github.com/hverlin/mise-vscode/issues/84)
 	if (process.platform === "win32") {

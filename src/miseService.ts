@@ -13,7 +13,6 @@ import {
 	getMiseEnv,
 	isMiseExtensionEnabled,
 	shouldCheckForNewMiseVersion,
-	updateBinPath,
 } from "./configuration";
 import { expandPath, isWindows, mkdirp } from "./utils/fileUtils";
 import { uniqBy } from "./utils/fn";
@@ -107,6 +106,7 @@ export class MiseService {
 
 	private hasVerifiedMiseVersion = false;
 	private _hasValidMiseBinPath = false;
+	private _resolvedMiseBinaryPath: string | undefined;
 	private invalidMisePathErrorShown = false;
 	get hasValidMiseBinPath(): boolean {
 		return this._hasValidMiseBinPath;
@@ -245,20 +245,10 @@ export class MiseService {
 		}
 
 		let miseBinaryPath = "mise";
-		const previousPath = getConfiguredBinPath();
 
 		try {
 			miseBinaryPath = await resolveMisePath();
-			if (previousPath !== miseBinaryPath) {
-				logger.info(`Mise binary path resolved to: ${miseBinaryPath}`);
-				await updateBinPath(miseBinaryPath);
-				if (previousPath) {
-					void showSettingsNotification(
-						`Mise binary path has been updated to: ${miseBinaryPath}`,
-						{ settingsKey: "mise.binPath", type: "info" },
-					);
-				}
-			}
+			logger.info(`Mise binary path resolved to: ${miseBinaryPath}`);
 		} catch (error) {
 			if (!this.invalidMisePathErrorShown) {
 				void showSettingsNotification(
@@ -269,9 +259,17 @@ export class MiseService {
 			}
 			logger.info("Failed to resolve mise binary path", error);
 			this._hasValidMiseBinPath = false;
+			this._resolvedMiseBinaryPath = undefined;
 			return;
 		}
 
+		// Keep the resolved path in memory instead of writing it back to the
+		// `mise.binPath` setting. That setting is synced across machines, so
+		// persisting a machine-specific absolute path made two machines (e.g. a
+		// Mac and a Linux remote) fight over it forever: each resolved its own
+		// path, wrote it, settings sync pushed the other machine's value back,
+		// and the config-change listener reloaded — an infinite loop.
+		this._resolvedMiseBinaryPath = miseBinaryPath;
 		this._hasValidMiseBinPath = true;
 		if (!this.hasVerifiedMiseVersion) {
 			const version = await this.getVersion();
@@ -354,7 +352,8 @@ export class MiseService {
 			return;
 		}
 
-		return getConfiguredBinPath();
+		// Prefer the in-memory resolved path; fall back to the configured value.
+		return this._resolvedMiseBinaryPath ?? getConfiguredBinPath();
 	}
 
 	public createMiseCommand(
