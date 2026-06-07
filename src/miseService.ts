@@ -174,6 +174,18 @@ export class MiseService {
 		return undefined;
 	}
 
+	/**
+	 * Full environment for spawning a mise task as a background process,
+	 * including the monorepo experimental flag when applicable.
+	 */
+	async getMiseRunEnv(): Promise<NodeJS.ProcessEnv> {
+		const env = { ...process.env };
+		if (await this.isMonorepoEnabled()) {
+			env.MISE_EXPERIMENTAL = "1";
+		}
+		return env;
+	}
+
 	private dedupeCache = createCache({
 		ttl: 0,
 		storage: { type: "memory" },

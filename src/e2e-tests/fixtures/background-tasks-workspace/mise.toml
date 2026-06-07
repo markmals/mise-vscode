@@ -1,0 +1,13 @@
+[tasks.bg-quick]
+description = "One-shot task that writes a marker file"
+run = 'echo "hello from bg-quick" && echo done > "${TMPDIR:-/tmp}/mise-bg-quick.txt"'
+
+# Long-running task that records when it starts and, via a SIGTERM trap, when it
+# is stopped. Used to verify that stopping signals the whole process tree.
+[tasks.bg-longrunner]
+description = "Long-running task with a SIGTERM trap"
+run = '''
+trap 'echo stopped > "${TMPDIR:-/tmp}/mise-bg-stopped.txt"; exit 0' TERM
+echo started > "${TMPDIR:-/tmp}/mise-bg-started.txt"
+while true; do sleep 0.2; done
+'''

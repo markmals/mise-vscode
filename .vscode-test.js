@@ -31,4 +31,14 @@ module.exports = defineConfig([
 		installExtensions: ["tombi-toml.tombi"],
 		mocha,
 	},
+	{
+		label: "background",
+		files: "src/e2e-tests/background/*.e2e.ts",
+		workspaceFolder: path.join(fixturesPath, "background-tasks-workspace"),
+		env: {
+			MISE_CEILING_PATHS: fixturesPath,
+		},
+		installExtensions: ["tombi-toml.tombi"],
+		mocha,
+	},
 ]);

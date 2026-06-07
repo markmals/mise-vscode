@@ -324,6 +324,13 @@
           "default": false,
           "markdownDescription": "Enable document symbol provider for mise TOML files. Provides an outline of tasks, tools, env, and settings sections. This is always enabled on the web. On desktop, you can use [Tombi](https://marketplace.visualstudio.com/items?itemName=tombi-toml.tombi) for better TOML support."
         },
+        "mise.runTasksInBackground": {
+          "order": 10.7,
+          "type": "boolean",
+          "title": "Run tasks in the background",
+          "default": true,
+          "markdownDescription": "Run tasks as background processes instead of in a terminal. Output is streamed to a per-task output channel and only surfaced automatically if the task fails; a status bar item shows running tasks and lets you stop them. Disable this to run tasks in an integrated terminal. You can always use the **Mise: Run Task in Terminal** command for a one-off terminal run."
+        },
         "mise.showNotificationIfMissingTools": {
           "order": 11,
           "type": "boolean",
@@ -637,6 +644,24 @@
         "enablement": "!isWeb"
       },
       {
+        "command": "mise.runTaskInTerminal",
+        "title": "Mise: Run Task in Terminal",
+        "icon": "$(terminal)",
+        "enablement": "!isWeb"
+      },
+      {
+        "command": "mise.stopTask",
+        "title": "Mise: Stop Task",
+        "icon": "$(debug-stop)",
+        "enablement": "!isWeb"
+      },
+      {
+        "command": "mise.showTaskOutput",
+        "title": "Mise: Show Task Output",
+        "icon": "$(output)",
+        "enablement": "!isWeb"
+      },
+      {
         "command": "mise.createFileTask",
         "title": "Mise: Create File Task",
         "icon": "$(new-file)",
@@ -914,12 +939,22 @@
         {
           "when": "view == miseTasksView && viewItem == miseTask",
           "command": "mise.runTask",
-          "group": "inline"
+          "group": "inline@1"
         },
         {
           "when": "view == miseTasksView && viewItem == miseTask",
           "command": "mise.watchTask",
-          "group": "inline"
+          "group": "inline@2"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.showTaskOutput",
+          "group": "inline@1"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.stopTask",
+          "group": "inline@2"
         },
         {
           "when": "view == miseTasksView && viewItem == miseTaskGroupEditable",
@@ -939,6 +974,31 @@
         {
           "when": "view == miseTasksView && viewItem == miseTask",
           "command": "mise.watchTask",
+          "group": "2_modification"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTask",
+          "command": "mise.runTaskInTerminal",
+          "group": "2_modification"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.stopTask",
+          "group": "2_modification"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.showTaskOutput",
+          "group": "2_modification"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.runTask",
+          "group": "2_modification"
+        },
+        {
+          "when": "view == miseTasksView && viewItem == miseTaskRunning",
+          "command": "mise.runTaskInTerminal",
           "group": "2_modification"
         },
         {

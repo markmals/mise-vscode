@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createCache } from "async-cache-dedupe";
 import vscode, { MarkdownString } from "vscode";
 import { version } from "../package.json";
+import { BackgroundTaskRunner } from "./backgroundTaskRunner";
 import {
 	MISE_CONFIGURE_ALL_SDK_PATHS,
 	MISE_DISMISS_MISSING_TOOLS_WARNING,
@@ -173,9 +174,21 @@ export class MiseExtension {
 				},
 			),
 		);
-		const tasksProvider = new MiseTasksProvider(this.miseService);
+		const backgroundTaskRunner = new BackgroundTaskRunner(this.miseService);
+		context.subscriptions.push(backgroundTaskRunner);
+
+		const tasksProvider = new MiseTasksProvider(
+			this.miseService,
+			backgroundTaskRunner,
+		);
 		const toolsProvider = new MiseToolsProvider(this.miseService);
 		const envsProvider = new MiseEnvsProvider(this.miseService);
+
+		context.subscriptions.push(
+			backgroundTaskRunner.onDidChangeRunningTasks(() =>
+				tasksProvider.refresh(),
+			),
+		);
 
 		registerTasksCommands(context, tasksProvider);
 		registerToolsCommands(context, this.miseService);

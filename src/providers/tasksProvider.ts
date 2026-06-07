@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { BackgroundTaskRunner } from "../backgroundTaskRunner";
 import {
 	MISE_CREATE_FILE_TASK,
 	MISE_CREATE_TOML_TASK,
@@ -8,9 +9,15 @@ import {
 	MISE_OPEN_FILE,
 	MISE_OPEN_TASK_DEFINITION,
 	MISE_RUN_TASK,
+	MISE_RUN_TASK_IN_TERMINAL,
+	MISE_SHOW_TASK_OUTPUT,
+	MISE_STOP_TASK,
 	MISE_WATCH_TASK,
 } from "../commands";
-import { isMiseExtensionEnabled } from "../configuration";
+import {
+	isMiseExtensionEnabled,
+	shouldRunTasksInBackground,
+} from "../configuration";
 import type { MiseService } from "../miseService";
 import {
 	displayPathRelativeTo,
@@ -37,7 +44,10 @@ export class MiseTasksProvider implements vscode.TreeDataProvider<TreeNode> {
 		TreeNode | undefined | null | void
 	> = this._onDidChangeTreeData.event;
 
-	constructor(private miseService: MiseService) {}
+	constructor(
+		private miseService: MiseService,
+		private backgroundRunner: BackgroundTaskRunner,
+	) {}
 
 	refresh(): void {
 		this._onDidChangeTreeData.fire();
@@ -49,6 +59,10 @@ export class MiseTasksProvider implements vscode.TreeDataProvider<TreeNode> {
 
 	getMiseService(): MiseService {
 		return this.miseService;
+	}
+
+	getBackgroundRunner(): BackgroundTaskRunner {
+		return this.backgroundRunner;
 	}
 
 	async getTasksSourceGroupItems() {
@@ -105,7 +119,10 @@ export class MiseTasksProvider implements vscode.TreeDataProvider<TreeNode> {
 		}
 
 		if (element instanceof TasksSourceGroupItem) {
-			return element.tasks.map((task) => new TaskItem(task));
+			return element.tasks.map(
+				(task) =>
+					new TaskItem(task, this.backgroundRunner.isRunning(task.name)),
+			);
 		}
 
 		return [];
@@ -210,25 +227,29 @@ export class MiseTasksProvider implements vscode.TreeDataProvider<TreeNode> {
 		return cmdArgs;
 	}
 
-	async runTask(taskName: string) {
+	async runTask(taskName: string, { forceTerminal = false } = {}) {
 		try {
 			const taskInfo = await this.miseService.getTaskInfo(taskName);
 			if (!taskInfo) {
 				throw new Error(`Task '${taskName}' not found`);
 			}
 
+			let args: string[] = [];
 			if (
 				taskInfo.usageSpec.args.length > 0 ||
 				taskInfo.usageSpec.flags.length > 0
 			) {
-				const args = await this.collectArgumentValues(taskInfo);
-				if (args === undefined) {
+				const collected = await this.collectArgumentValues(taskInfo);
+				if (collected === undefined) {
 					return;
 				}
+				args = collected;
+			}
 
-				await this.miseService.runTask(taskName, ...args);
+			if (!forceTerminal && shouldRunTasksInBackground()) {
+				await this.backgroundRunner.run(taskName, args);
 			} else {
-				await this.miseService.runTask(taskName);
+				await this.miseService.runTask(taskName, ...args);
 			}
 		} catch (error) {
 			vscode.window.showErrorMessage(
@@ -321,11 +342,15 @@ class TasksSourceGroupItem extends vscode.TreeItem {
 }
 
 class TaskItem extends vscode.TreeItem {
-	constructor(public readonly task: MiseTask) {
+	constructor(
+		public readonly task: MiseTask,
+		isRunning = false,
+	) {
 		super(task.name, vscode.TreeItemCollapsibleState.None);
 		const runInfo = task.run?.join(" ");
 		this.tooltip = [
 			["Task", task.name],
+			["Status", isRunning ? "Running" : ""],
 			["Description", task.description],
 			["Source", task.source],
 			["Directory", task.dir],
@@ -340,7 +365,9 @@ class TaskItem extends vscode.TreeItem {
 
 		this.description = (task.description || task.run?.join(" ")) ?? "";
 
-		this.iconPath = new vscode.ThemeIcon("tasklist");
+		this.iconPath = isRunning
+			? new vscode.ThemeIcon("sync~spin")
+			: new vscode.ThemeIcon("tasklist");
 
 		this.command = {
 			command: MISE_OPEN_TASK_DEFINITION,
@@ -349,7 +376,7 @@ class TaskItem extends vscode.TreeItem {
 			arguments: [task],
 		};
 
-		this.contextValue = "miseTask";
+		this.contextValue = isRunning ? "miseTaskRunning" : "miseTask";
 	}
 }
 
@@ -358,6 +385,33 @@ export function registerTasksCommands(
 	taskProvider: MiseTasksProvider,
 ) {
 	const miseService = taskProvider.getMiseService();
+	const backgroundRunner = taskProvider.getBackgroundRunner();
+
+	const toTaskName = (
+		arg: undefined | string | MiseTask | TaskItem,
+	): string => {
+		if (!arg) {
+			return "";
+		}
+		if (typeof arg === "string") {
+			return arg;
+		}
+		return arg instanceof TaskItem ? arg.task.name : (arg.name ?? "");
+	};
+
+	const pickRunningTask = async (): Promise<string | undefined> => {
+		const running = backgroundRunner.getRunningTaskNames();
+		if (running.length === 0) {
+			vscode.window.showInformationMessage("No mise tasks are running.");
+			return undefined;
+		}
+		if (running.length === 1) {
+			return running[0];
+		}
+		return vscode.window.showQuickPick(running, {
+			placeHolder: "Select a running task",
+		});
+	};
 
 	context.subscriptions.push(
 		vscode.commands.registerCommand(
@@ -403,6 +457,46 @@ export function registerTasksCommands(
 				taskProvider.watchTask(name).catch((error) => {
 					logger.error(`Failed to run task (watch mode) '${taskName}':`, error);
 				});
+			},
+		),
+		vscode.commands.registerCommand(
+			MISE_RUN_TASK_IN_TERMINAL,
+			async (taskName: undefined | string | MiseTask | TaskItem) => {
+				await vscode.workspace.saveAll(false);
+
+				let name = toTaskName(taskName);
+				if (!name) {
+					name =
+						(await vscode.window.showQuickPick(taskProvider.getTasksNames(), {
+							placeHolder: "Select a task to run in a terminal",
+						})) ?? "";
+				}
+				if (!name) {
+					return;
+				}
+				taskProvider.runTask(name, { forceTerminal: true }).catch((error) => {
+					logger.error(`Failed to run task '${name}' in terminal:`, error);
+				});
+			},
+		),
+		vscode.commands.registerCommand(
+			MISE_STOP_TASK,
+			async (taskName: undefined | string | MiseTask | TaskItem) => {
+				const name = toTaskName(taskName) || (await pickRunningTask());
+				if (!name) {
+					return;
+				}
+				await backgroundRunner.stop(name);
+			},
+		),
+		vscode.commands.registerCommand(
+			MISE_SHOW_TASK_OUTPUT,
+			async (taskName: undefined | string | MiseTask | TaskItem) => {
+				const name = toTaskName(taskName) || (await pickRunningTask());
+				if (!name) {
+					return;
+				}
+				backgroundRunner.showOutput(name);
 			},
 		),
 		vscode.commands.registerCommand(
