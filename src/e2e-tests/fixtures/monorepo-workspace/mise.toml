@@ -1,0 +1,8 @@
+experimental_monorepo_root = true
+
+[monorepo]
+config_roots = ["packages/*"]
+
+[tasks.root-task]
+description = "Task defined in the monorepo root config"
+run = "echo 'Hello from the root task'"

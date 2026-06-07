@@ -1,5 +1,9 @@
 import { describe, expect, it } from "bun:test";
-import { getWebsiteForTool } from "./miseUtilts";
+import {
+	getBaseTaskName,
+	getWebsiteForTool,
+	isMonorepoTaskName,
+} from "./miseUtilts";
 
 // Mock MiseToolInfo objects matching exact `mise tool X --json` outputs
 
@@ -95,5 +99,36 @@ describe("getWebsiteForTool", () => {
 		// @ts-expect-error intentional
 		const result = await getWebsiteForTool({ backend: "unknown" });
 		expect(result).toBeUndefined();
+	});
+});
+
+describe("isMonorepoTaskName", () => {
+	it("detects monorepo-prefixed names", () => {
+		expect(isMonorepoTaskName("//packages/frontend:build")).toBe(true);
+		expect(isMonorepoTaskName("//:root-task")).toBe(true);
+	});
+
+	it("returns false for regular task names", () => {
+		expect(isMonorepoTaskName("build")).toBe(false);
+		expect(isMonorepoTaskName("docs:build")).toBe(false);
+		expect(isMonorepoTaskName("")).toBe(false);
+	});
+});
+
+describe("getBaseTaskName", () => {
+	it("strips the //<path>: prefix in monorepo mode", () => {
+		expect(getBaseTaskName("//packages/frontend:build")).toBe("build");
+		expect(getBaseTaskName("//:root-task")).toBe("root-task");
+	});
+
+	it("keeps colons that are part of the task name", () => {
+		expect(getBaseTaskName("//packages/frontend:docs:build")).toBe(
+			"docs:build",
+		);
+	});
+
+	it("returns non-monorepo names unchanged", () => {
+		expect(getBaseTaskName("build")).toBe("build");
+		expect(getBaseTaskName("docs:build")).toBe("docs:build");
 	});
 });

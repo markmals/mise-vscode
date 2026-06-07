@@ -118,6 +118,62 @@ export class MiseService {
 		return getCurrentWorkspaceFolderPath(this.context);
 	}
 
+	private monorepoEnabledPromise: Promise<boolean> | undefined;
+	private monorepoEnabledResolved = false;
+
+	/**
+	 * Detects whether the current workspace uses mise's monorepo mode
+	 * (`experimental_monorepo_root = true` in the root config). When enabled,
+	 * mise needs `MISE_EXPERIMENTAL=1` to resolve nested config roots and emits
+	 * tasks namespaced as `//path:task`.
+	 * https://mise.jdx.dev/tasks/monorepo.html
+	 *
+	 * The result is memoized for the lifetime of the cache (reset by
+	 * `invalidateCache`) and the detection itself runs without the experimental
+	 * flag, so it can't recurse through `execMiseCommand`.
+	 */
+	async isMonorepoEnabled(): Promise<boolean> {
+		if (this.monorepoEnabledPromise === undefined) {
+			this.monorepoEnabledPromise = (async () => {
+				const command = this.createMiseCommand(
+					"config get experimental_monorepo_root",
+					{ setMiseEnv: false },
+				);
+				if (!command) {
+					return false;
+				}
+				try {
+					const { stdout } = await execAsync(command, {
+						cwd: this.getCurrentWorkspaceFolderPath(),
+					});
+					return stdout.trim() === "true";
+				} catch {
+					// `config get` exits non-zero when the key is unset.
+					return false;
+				}
+			})();
+			this.monorepoEnabledPromise.then((enabled) => {
+				this.monorepoEnabledResolved = enabled;
+			});
+		}
+		return this.monorepoEnabledPromise;
+	}
+
+	/**
+	 * Last resolved value of {@link isMonorepoEnabled}, for synchronous callers
+	 * (e.g. `resolveTask`). Defaults to `false` until detection has run once.
+	 */
+	isMonorepoEnabledSync(): boolean {
+		return this.monorepoEnabledResolved;
+	}
+
+	private async getMiseExecEnv(): Promise<NodeJS.ProcessEnv | undefined> {
+		if (await this.isMonorepoEnabled()) {
+			return { ...process.env, MISE_EXPERIMENTAL: "1" };
+		}
+		return undefined;
+	}
+
 	private dedupeCache = createCache({
 		ttl: 0,
 		storage: { type: "memory" },
@@ -160,6 +216,8 @@ export class MiseService {
 		});
 
 	async invalidateCache() {
+		this.monorepoEnabledPromise = undefined;
+		this.monorepoEnabledResolved = false;
 		await Promise.all([
 			this.dedupeCache.clear(),
 			this.slowCache.clear(),
@@ -234,8 +292,10 @@ export class MiseService {
 		const miseCommand = this.createMiseCommand(command, { setMiseEnv });
 		ensureMiseCommand(miseCommand);
 		logger.debug(`> ${miseCommand}`);
+		const env = await this.getMiseExecEnv();
 		return execAsync(miseCommand, {
 			cwd: this.getCurrentWorkspaceFolderPath(),
+			...(env ? { env } : {}),
 		});
 	}
 
@@ -378,8 +438,12 @@ export class MiseService {
 			return [];
 		}
 
+		// `--all` surfaces tasks from every config root in monorepo mode so that
+		// nested sources get watched and indexed. It only matters there, so the
+		// non-monorepo command stays unchanged.
+		const extraArgs = (await this.isMonorepoEnabled()) ? " --all" : "";
 		const { stdout } = await this.slowCache.execCmd({
-			command: "tasks ls --json --hidden",
+			command: `tasks ls --json --hidden${extraArgs}`,
 		});
 		return JSON.parse(stdout);
 	}
@@ -598,7 +662,8 @@ export class MiseService {
 	}
 
 	async runTask(taskName: string, ...args: string[]): Promise<void> {
-		const terminal = this.getOrCreateTerminal(`run ${taskName}`);
+		const env = await this.getTerminalMiseEnv();
+		const terminal = this.getOrCreateTerminal(`run ${taskName}`, env);
 		terminal.show();
 
 		const runTaskCmd = isWindows
@@ -616,7 +681,8 @@ export class MiseService {
 			previousTerminal.dispose();
 			this.terminals.delete(terminalName);
 		}
-		const terminal = this.getOrCreateTerminal(terminalName);
+		const env = await this.getTerminalMiseEnv();
+		const terminal = this.getOrCreateTerminal(terminalName, env);
 		terminal.show();
 		const watchTaskCmd = isWindows
 			? `watch "${taskName.replace(/"/g, '\\"')}"`
@@ -626,12 +692,46 @@ export class MiseService {
 		await runInVscodeTerminal(terminal, `${baseCommand} ${args.join(" ")}`);
 	}
 
-	private getOrCreateTerminal(name: string): vscode.Terminal {
+	// Task terminals run `mise` directly, bypassing `execMiseCommand`, so the
+	// experimental flag has to be set on the terminal environment for `//path:task`
+	// names to resolve in monorepo mode.
+	private async getTerminalMiseEnv(): Promise<
+		{ [key: string]: string } | undefined
+	> {
+		return (await this.isMonorepoEnabled())
+			? { MISE_EXPERIMENTAL: "1" }
+			: undefined;
+	}
+
+	// `vscode.ShellExecution` (VS Code's native task runner) also bypasses
+	// `execMiseCommand`. Uses the synchronously-cached monorepo flag since
+	// `resolveTask` is not async. The full process environment is included
+	// (not just the override) so the task keeps PATH etc. regardless of how
+	// VS Code merges `ShellExecutionOptions.env`.
+	getTaskShellExecutionOptions(): vscode.ShellExecutionOptions | undefined {
+		if (!this.isMonorepoEnabledSync()) {
+			return undefined;
+		}
+		const env: { [key: string]: string } = {};
+		for (const [key, value] of Object.entries(process.env)) {
+			if (value !== undefined) {
+				env[key] = value;
+			}
+		}
+		env.MISE_EXPERIMENTAL = "1";
+		return { env };
+	}
+
+	private getOrCreateTerminal(
+		name: string,
+		env?: { [key: string]: string },
+	): vscode.Terminal {
 		let terminal = this.terminals.get(name);
 		if (!terminal || isTerminalClosed(terminal)) {
 			terminal = vscode.window.createTerminal({
 				name,
 				cwd: this.getCurrentWorkspaceFolderPath(),
+				...(env ? { env } : {}),
 			});
 
 			vscode.window.onDidCloseTerminal((closedTerminal) => {

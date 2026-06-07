@@ -289,3 +289,25 @@ export const isMiseTomlFile = (filename: string) => {
 		/mise\.[^.]*\.?toml$/.test(filename) || filename.endsWith("config.toml")
 	);
 };
+
+/**
+ * In monorepo mode, mise prefixes task names with the config root path, e.g.
+ * `//packages/frontend:build` or `//:root-task`. The portion after the first
+ * colon is the task name as it appears in the config file (which itself may
+ * contain colons, e.g. `//packages/frontend:docs:build`).
+ * https://mise.jdx.dev/tasks/monorepo.html
+ */
+export const isMonorepoTaskName = (name: string): boolean =>
+	name.startsWith("//");
+
+/**
+ * Returns the task name as written in its config file, stripping any monorepo
+ * `//<path>:` prefix. Non-monorepo names are returned unchanged.
+ */
+export const getBaseTaskName = (name: string): string => {
+	if (!isMonorepoTaskName(name)) {
+		return name;
+	}
+	const colonIndex = name.indexOf(":");
+	return colonIndex === -1 ? name : name.slice(colonIndex + 1);
+};

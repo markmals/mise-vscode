@@ -14,6 +14,10 @@ export class VsCodeTaskProvider {
 				}
 
 				const tasks = await miseService.getTasks();
+				// Prime the synchronous monorepo flag before reading the shell
+				// execution options below.
+				await miseService.isMonorepoEnabled();
+				const shellOptions = miseService.getTaskShellExecutionOptions();
 				return tasks
 					.map((task) => {
 						const taskDefinition: vscode.TaskDefinition = {
@@ -32,7 +36,10 @@ export class VsCodeTaskProvider {
 							return undefined;
 						}
 
-						const execution = new vscode.ShellExecution(baseCommand);
+						const execution = new vscode.ShellExecution(
+							baseCommand,
+							shellOptions,
+						);
 						return new vscode.Task(
 							taskDefinition,
 							vscode.TaskScope.Workspace,
@@ -83,7 +90,10 @@ export class VsCodeTaskProvider {
 						return undefined;
 					}
 
-					const execution = new vscode.ShellExecution(baseCommand);
+					const execution = new vscode.ShellExecution(
+						baseCommand,
+						miseService.getTaskShellExecutionOptions(),
+					);
 					return new vscode.Task(
 						definition,
 						task.scope ?? vscode.TaskScope.Workspace,

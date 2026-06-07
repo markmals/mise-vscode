@@ -10,7 +10,10 @@ import {
 import { isCodeLensEnabled, isMiseExtensionEnabled } from "../configuration";
 import type { MiseService } from "../miseService";
 import { expandPath } from "../utils/fileUtils";
-import { isMiseTomlFile } from "../utils/miseUtilts";
+import { getBaseTaskName, isMiseTomlFile } from "../utils/miseUtilts";
+
+type TaskNameQualifier = (taskName: string) => string;
+const identityQualifier: TaskNameQualifier = (taskName) => taskName;
 
 function createRunTaskCodeLens(
 	taskName: string,
@@ -108,7 +111,35 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 		});
 	}
 
-	private handleInTasksSection(i: number, lineContent: string) {
+	/**
+	 * In monorepo mode mise addresses tasks by their config-root-qualified name
+	 * (`//packages/frontend:build`). The toml only contains the base name, so we
+	 * map it back to the name mise expects before wiring up the run/watch
+	 * commands. Outside monorepo mode this is the identity function.
+	 */
+	private async getTaskNameQualifier(
+		document: vscode.TextDocument,
+	): Promise<TaskNameQualifier> {
+		if (!(await this.miseService.isMonorepoEnabled())) {
+			return identityQualifier;
+		}
+
+		const tasks = await this.miseService.getTasks({ includeHidden: true });
+		const documentPath = expandPath(document.uri.fsPath);
+		const qualifiedByBaseName = new Map<string, string>();
+		for (const task of tasks) {
+			if (expandPath(task.source) === documentPath) {
+				qualifiedByBaseName.set(getBaseTaskName(task.name), task.name);
+			}
+		}
+		return (taskName) => qualifiedByBaseName.get(taskName) ?? taskName;
+	}
+
+	private handleInTasksSection(
+		i: number,
+		lineContent: string,
+		qualify: TaskNameQualifier,
+	) {
 		const trimmedLine = lineContent.trim();
 		const inlineName = trimmedLine.split("=")[0]?.trim();
 		if (
@@ -121,7 +152,7 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 			const startPos = new vscode.Position(i, lineContent.indexOf(taskName));
 			const endPos = startPos.translate(0, taskName.length);
 			return createRunAndWatchTaskCodeLens(
-				taskName,
+				qualify(taskName),
 				new vscode.Range(startPos, endPos),
 			);
 		}
@@ -129,7 +160,10 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 		return [];
 	}
 
-	private handleTaskFile(document: vscode.TextDocument): vscode.CodeLens[] {
+	private handleTaskFile(
+		document: vscode.TextDocument,
+		qualify: TaskNameQualifier,
+	): vscode.CodeLens[] {
 		// we are already in a [tasks] section so valid patterns are
 		// abc = '333' or "lint:test" = '333'
 		// [abc] or ["lint:ci"]
@@ -151,7 +185,7 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 			}
 
 			if (inTasksSection) {
-				codeLenses.push(...this.handleInTasksSection(i, lineContent));
+				codeLenses.push(...this.handleInTasksSection(i, lineContent, qualify));
 			} else {
 				const match = trimmedLine.match(/^\s*\[["']?(.*)["']?]/);
 
@@ -164,7 +198,7 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 						const endPos = startPos.translate(0, taskName.length);
 						codeLenses.push(
 							...createRunAndWatchTaskCodeLens(
-								taskName,
+								qualify(taskName),
 								new vscode.Range(startPos, endPos),
 							),
 						);
@@ -175,7 +209,10 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 		return codeLenses;
 	}
 
-	private async handleMiseTomlFile(document: vscode.TextDocument) {
+	private async handleMiseTomlFile(
+		document: vscode.TextDocument,
+		qualify: TaskNameQualifier,
+	) {
 		const codeLenses: vscode.CodeLens[] = [];
 		const lines = document.getText().split("\n");
 
@@ -241,13 +278,13 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 					const endPos = startPos.translate(0, taskName.length);
 					codeLenses.push(
 						...createRunAndWatchTaskCodeLens(
-							taskName,
+							qualify(taskName),
 							new vscode.Range(startPos, endPos),
 						),
 					);
 				}
 			} else if (inTasksSection) {
-				codeLenses.push(...this.handleInTasksSection(i, lineContent));
+				codeLenses.push(...this.handleInTasksSection(i, lineContent, qualify));
 			}
 		}
 
@@ -274,10 +311,12 @@ export class MiseTomlCodeLensProvider implements vscode.CodeLensProvider {
 			return [];
 		}
 
+		const qualify = await this.getTaskNameQualifier(document);
+
 		if (isMiseTomlFile(document.fileName)) {
-			return await this.handleMiseTomlFile(document);
+			return await this.handleMiseTomlFile(document, qualify);
 		}
 
-		return this.handleTaskFile(document);
+		return this.handleTaskFile(document, qualify);
 	}
 }

@@ -1,7 +1,7 @@
 import { parse, SourceTracker } from "toml-v1";
 import * as vscode from "vscode";
 import { logger } from "./logger";
-import { TOOLS_MAPPING } from "./miseUtilts";
+import { getBaseTaskName, TOOLS_MAPPING } from "./miseUtilts";
 
 export type MiseTomlType = {
 	tools?: Record<string, string | object>;
@@ -219,21 +219,26 @@ export function findTaskDefinition(
 		};
 	}
 
+	// In monorepo mode task names are prefixed with their config root
+	// (e.g. `//packages/frontend:build`), but inside the toml the task is keyed
+	// by its base name (`build`).
+	const baseTaskName = getBaseTaskName(taskName);
+
 	try {
 		const text = document.getText();
 
 		const tomlParser = new TomlParser<MiseTomlType>(text);
 		const keyPosition = tomlParser.sourceTracker.getKeySource(
 			tomlParser.parsed?.tasks ?? tomlParser.parsed,
-			taskName,
+			baseTaskName,
 		);
 		const valuePosition = tomlParser.sourceTracker.getValueSource(
 			tomlParser.parsed?.tasks ?? tomlParser.parsed,
-			taskName,
+			baseTaskName,
 		);
 
 		if (!keyPosition || !valuePosition) {
-			logger.info("Could not find task definition:", taskName);
+			logger.info("Could not find task definition:", baseTaskName);
 			return {
 				start: new vscode.Position(0, 0),
 				end: new vscode.Position(0, 0),

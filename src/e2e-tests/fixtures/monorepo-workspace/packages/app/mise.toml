@@ -1,0 +1,3 @@
+[tasks.app-build]
+description = "Task defined in a nested monorepo config root"
+run = "echo 'Hello from the nested app-build task'"
